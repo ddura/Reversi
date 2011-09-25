@@ -37,7 +37,8 @@ package
 	import com.christiancantrell.components.AlertEvent;
 	import com.christiancantrell.components.Label;
 	import com.christiancantrell.components.TextButton;
-	import com.christiancantrell.data.HistoryEntry;
+	import com.christiancantrell.data.ReversiGameModel;
+	import com.christiancantrell.events.ReversiGameModelEvent;
 	import com.christiancantrell.utils.Layout;
 	import com.christiancantrell.utils.Ruler;
 	
@@ -51,18 +52,12 @@ package
 	import flash.events.Event;
 	import flash.events.KeyboardEvent;
 	import flash.events.MouseEvent;
-	import flash.events.NetStatusEvent;
 	import flash.events.TimerEvent;
 	import flash.filters.BevelFilter;
 	import flash.filters.BlurFilter;
 	import flash.filters.DropShadowFilter;
 	import flash.filters.GlowFilter;
 	import flash.geom.Matrix;
-	import flash.net.GroupSpecifier;
-	import flash.net.NetConnection;
-	import flash.net.NetGroup;
-	import flash.net.SharedObject;
-	import flash.net.registerClassAlias;
 	import flash.sensors.Accelerometer;
 	import flash.system.Capabilities;
 	import flash.ui.Keyboard;
@@ -71,55 +66,41 @@ package
 	public class Reversi extends Sprite
 	{
 		private const WHITE_COLOR:uint        = 0xffffff;
-		private const WHITE_COLOR_NAME:String = "White";
 		private const BLACK_COLOR:uint        = 0x000000;
-		private const BLACK_COLOR_NAME:String = "Black";
+		public static const WHITE_COLOR_NAME:String = "White";
+		public static const BLACK_COLOR_NAME:String = "Black";
 		private const BOARD_COLORS:Array      = [0x666666, 0x333333];
 		private const BOARD_LINES:uint        = 0x666666;
 		private const BACKGROUND_COLOR:uint   = 0x666666;
 		private const TITLE_COLOR:uint        = 0xffffff;
 		private const TURN_GLOW_COLORS:Array  = [0xffffff, 0x000000];
+
 		private const TITLE:String = "iReverse";
-		private const WHITE:Boolean = true;
-		private const BLACK:Boolean = false;
 		private const PORTRAIT:String = "portrait";
 		private const LANDSCAPE:String = "landscape";
-		private const SINGLE_PLAYER_MODE:String = "singlePlayerMode";
 		private const SINGLE_PLAYER_STRING:String = "Single Player Game";
-		private const TWO_PLAYER_MODE:String = "twoPlayerMode";
 		private const TWO_PLAYER_STRING:String = "Two Player Game";
 		private const NETWORK_PLAY_STRING:String = "Network";
 		private const CANCEL_STRING:String = "Cancel";
 		private const COMPUTER_COLOR_STRING:String = "Computer Plays ";
-		private const SO_KEY:String = "com.christiancantrell.reversi";
-		private const HISTORY_KEY:String = "history";
-		private const PLAYER_MODE_KEY:String = "playerMode";
-		private const COMPUTER_COLOR_KEY:String = "computerColor";
 		private const CACHE_AS_BITMAP:Boolean = true;
 		private const STONE_EFFECT_INTERVAL:uint = 40;
-		private const COMPUTER_WAIT_TIME:uint = 1000; // milliseconds
 		
+		
+		private var gameModel:ReversiGameModel;
 		private var board:Sprite;
-		private var stones:Array;
-		private var turn:Boolean;
-		private var networkMode:Boolean;
 		private var pieces:Vector.<Bitmap>;
-		private var history:Array;
-		private var historyIndex:int;
+
 		private var blackScoreLabel:Label, whiteScoreLabel:Label;
 		private var backButton:TextButton, backButton2:TextButton, nextButton:TextButton, nextButton2:TextButton;
-		private var blackScore:uint;
-		private var whiteScore:uint;
+
 		private var turnFilter:BlurFilter;
 		private var ppi:Number;
 		private var stoneBevel:BevelFilter;
 		private var boardShadow:DropShadowFilter;
 		private var titleShadow:DropShadowFilter;
-		private var playerMode:String;
-		private var computerColor:Boolean;
-		private var so:SharedObject;
+		
 		private var stoneEffectTimer:Timer;
-		private var computerWaitTimer:Timer;
 		private var whiteStoneBitmap:Bitmap;
 		private var blackStoneBitmap:Bitmap;
 		private var layoutPending:Boolean;
@@ -129,62 +110,24 @@ package
 		private var reticleFilter:GlowFilter;
 		private var stageWidth:int;
 		private var stageHeight:int;
-		private var netConnection:NetConnection;
-		private var netGroup:NetGroup;
 		
-		public function Reversi(ppi:Number = -1)
+		public function Reversi( gameModel:ReversiGameModel, ppi:Number = -1)
 		{
 			super();
-			registerClassAlias("com.christiancantrell.data.HistoryEntry", HistoryEntry);
-			this.so = SharedObject.getLocal(SO_KEY);
+			this.gameModel = gameModel;
+			this.gameModel.addEventListener( ReversiGameModelEvent.STONES_TURNED, onStonesTurned );
+			this.gameModel.addEventListener( ReversiGameModelEvent.TURN_CHANGE, onTurnFinished );
+			
 			this.ppi = (ppi == -1) ? Capabilities.screenDPI : ppi;
-			this.playerMode = SINGLE_PLAYER_MODE;
-			this.computerColor = WHITE;
-			if (!this.loadGame()) this.prepareGame();
 			this.initUIComponents();
 			this.addEventListener(Event.ADDED, onAddedToDisplayList);
+			
 			if (Accelerometer.isSupported)
 			{
 				this.accelerometer = new Accelerometer();
 				this.accelerometer.setRequestedUpdateInterval(1500);
 				this.accelerometer.addEventListener(AccelerometerEvent.UPDATE, onAccelerometerUpdated);
 			}
-		}
-		
-		private function loadGame():Boolean
-		{
-			var oldGame:Array = this.so.data[HISTORY_KEY] as Array;
-			if (oldGame == null) return false;
-			this.history = oldGame;
-			var lastEntry:HistoryEntry;
-			for (var i:uint = this.history.length; i >= 0; --i)
-			{
-				if (this.history[i] != null)
-				{
-					lastEntry = this.history[i] as HistoryEntry;
-					this.historyIndex = i;
-					break;
-				}
-			}
-			this.turn = lastEntry.turn;
-			this.stones = this.deepCopyStoneArray(lastEntry.board);
-			this.playerMode = this.so.data[PLAYER_MODE_KEY];
-			if (this.playerMode == SINGLE_PLAYER_MODE)
-			{
-				this.computerColor = this.so.data[COMPUTER_COLOR_KEY];
-			}
-			this.calculateScore();
-			return true;
-		}
-		
-		private function prepareGame():void
-		{
-			this.history = new Array(60);
-			this.historyIndex = -1;
-			this.turn = BLACK;  // Black always starts
-			this.initStones();
-			this.blackScore = 2;
-			this.whiteScore = 2;
 		}
 		
 		private function onAddedToDisplayList(e:Event):void
@@ -202,13 +145,12 @@ package
 			this.boardShadow = new DropShadowFilter(0, 90, 0, 1, 10, 10, 1, 1);
 			this.reticleFilter = new GlowFilter(0xffff00);
 			this.stoneEffectTimer = new Timer(STONE_EFFECT_INTERVAL);
-			this.computerWaitTimer = new Timer(COMPUTER_WAIT_TIME);
 			this.layoutPending = false;
 		}
 		
 		private function onAccelerometerUpdated(e:AccelerometerEvent):void
 		{
-			if (this.getOrientation() != PORTRAIT || this.playerMode != TWO_PLAYER_MODE) return;
+			if (this.getOrientation() != PORTRAIT || this.gameModel.playerMode != ReversiGameModel.TWO_PLAYER_MODE) return;
 			if (!this.flat && e.accelerationZ > .97)
 			{
 				this.flat = true;
@@ -334,8 +276,8 @@ package
 
 				// Scores
 				scoreSize = gutterHeight * .6;;
-				this.blackScoreLabel = new Label(String(this.blackScore), "bold", BLACK_COLOR, "_sans", scoreSize);
-				this.whiteScoreLabel = new Label(String(this.whiteScore), "bold", WHITE_COLOR, "_sans", scoreSize);
+				this.blackScoreLabel = new Label(String(this.gameModel.blackScore), "bold", BLACK_COLOR, "_sans", scoreSize);
+				this.whiteScoreLabel = new Label(String(this.gameModel.whiteScore), "bold", WHITE_COLOR, "_sans", scoreSize);
 
 				buttonWidth = this.stageWidth / 3;
 				buttonHeight = Ruler.mmToPixels(8, this.ppi);
@@ -376,8 +318,8 @@ package
 
 				// Scores
 				scoreSize = gutterHeight * .6;;
-				this.blackScoreLabel = new Label(String(this.blackScore), "bold", BLACK_COLOR, "_sans", scoreSize);
-				this.whiteScoreLabel = new Label(String(this.whiteScore), "bold", WHITE_COLOR, "_sans", scoreSize);
+				this.blackScoreLabel = new Label(String(this.gameModel.blackScore), "bold", BLACK_COLOR, "_sans", scoreSize);
+				this.whiteScoreLabel = new Label(String(this.gameModel.whiteScore), "bold", WHITE_COLOR, "_sans", scoreSize);
 
 				title = new Label(TITLE, "bold", TITLE_COLOR, "_sans", gutterHeight/4);
 				title.filters = [this.titleShadow];
@@ -413,8 +355,8 @@ package
 
 				// Scores
 				scoreSize = gutterWidth * .75;
-				this.blackScoreLabel = new Label(String(this.blackScore), "bold", BLACK_COLOR, "_sans", scoreSize);
-				this.whiteScoreLabel = new Label(String(this.whiteScore), "bold", WHITE_COLOR, "_sans", scoreSize);
+				this.blackScoreLabel = new Label(String(this.gameModel.blackScore), "bold", BLACK_COLOR, "_sans", scoreSize);
+				this.whiteScoreLabel = new Label(String(this.gameModel.whiteScore), "bold", WHITE_COLOR, "_sans", scoreSize);
 				
 				title = new Label(TITLE, "bold", TITLE_COLOR, "_sans", (gutterWidth/TITLE.length) + 4);
 				title.filters = [this.titleShadow];
@@ -457,12 +399,17 @@ package
 				this.whiteScoreLabel.cacheAsBitmap = true;
 			}
 			
-			this.evaluateButtons();
+			this.invalidateHistoryButtons();
 			if (title != null) this.addChild(title);
 			this.alignScores();
 			this.addChild(this.blackScoreLabel);
 			this.addChild(this.whiteScoreLabel);
 			this.changeTurnIndicator();
+		}
+		
+		private function onStonesTurned( event:ReversiGameModelEvent ):void
+		{
+			playStoneEffects( event.turnedStones );
 		}
 		
 		private function alignScores():void
@@ -542,7 +489,7 @@ package
 				}
 			}
 
-			if ((this.playerMode == SINGLE_PLAYER_MODE && this.turn == this.computerColor) || this.stoneEffectTimer.running) return;
+			if ((this.gameModel.playerMode == ReversiGameModel.SINGLE_PLAYER_MODE && this.gameModel.currentTurn == this.gameModel.reversiAI.computerColor) || this.stoneEffectTimer.running) return;
 			
 			if (e.keyCode == Keyboard.ENTER) // either starting or finishing a keyboard move
 			{
@@ -552,7 +499,7 @@ package
 					{
 						for (var y:uint = 0; y < 8; ++y)
 						{
-							if (this.stones[x][y] == null)
+							if (this.gameModel.stones[x][y] == null)
 							{
 								this.reticlePosition = {"x":x, "y":y};
 								this.placeReticleStone();
@@ -563,7 +510,7 @@ package
 				}
 				else // finishing
 				{
-					if (this.findCaptures(this.turn, this.reticlePosition.x, this.reticlePosition.y, false) > 0)
+					if (this.gameModel.findCaptures(this.gameModel.currentTurn, this.reticlePosition.x, this.reticlePosition.y, false) > 0)
 					{
 						var me:MouseEvent = new MouseEvent(MouseEvent.CLICK);
 						me.localX = this.reticlePosition.x * this.board.width / 8;
@@ -643,7 +590,7 @@ package
 				this.moveReticle(reticleX + 1, -1, deltaX, deltaY);
 				return;
 			}
-			if (this.stones[newX][newY] != null)
+			if (this.gameModel.stones[newX][newY] != null)
 			{
 				this.moveReticle((reticleX + deltaX), (reticleY + deltaY), deltaX, deltaY);
 				return;
@@ -653,42 +600,20 @@ package
 			this.placeReticleStone();
 		}
 		
-		private function onBack(e:MouseEvent = null, propagateOnNetwork:Boolean = true):void
+		private function onBack(e:MouseEvent = null):void
 		{
-			if (this.historyIndex == 0) return;
-			--this.historyIndex;
-			var historyEntry:HistoryEntry = this.history[this.historyIndex] as HistoryEntry;
-			this.stones = this.deepCopyStoneArray(historyEntry.board);
-			this.turn = historyEntry.turn;
+			this.gameModel.moveHistoryBack();
 			this.placeStones();
 			this.changeTurnIndicator();
-			this.onTurnFinished(false, false);
-			if (propagateOnNetwork)
-			{
-				var message:Object = new Object();
-				message.type = "history";
-				message.direction = "back";
-				this.sendNetworkMessage(message);
-			}
+//FIX			this.onTurnFinished(false, false);
 		}
 		
-		private function onNext(e:MouseEvent = null, propagateOnNetwork:Boolean = true):void
+		private function onNext(e:MouseEvent = null):void
 		{
-			if (this.history[this.historyIndex+1] == null) return;
-			++this.historyIndex;
-			var historyEntry:HistoryEntry = this.history[this.historyIndex] as HistoryEntry;
-			this.stones = this.deepCopyStoneArray(historyEntry.board);
-			this.turn = historyEntry.turn;
+			this.gameModel.moveHistoryForward();
 			this.placeStones();
 			this.changeTurnIndicator();
-			this.onTurnFinished(false, false);
-			if (propagateOnNetwork)
-			{
-				var message:Object = new Object();
-				message.type = "history";
-				message.direction = "next";
-				this.sendNetworkMessage(message);
-			}
+//FIX			this.onTurnFinished(false, false);
 		}
 		
 		private function isAlertShowing():Boolean
@@ -722,17 +647,16 @@ package
 			var alert:Alert = e.target as Alert;
 			alert.removeEventListener(AlertEvent.ALERT_CLICKED, onNewGameConfirm);
 			if (e.label == CANCEL_STRING) return;
-			this.networkMode = false;
-			this.deletePersistentData();
+			this.gameModel.deletePersistentData();
 			this.onNetworkPlayCanceled();
 			if (e.label == TWO_PLAYER_STRING)
 			{
-				this.playerMode = TWO_PLAYER_MODE;
-				this.prepareGame();
+				this.gameModel.playerMode = ReversiGameModel.TWO_PLAYER_MODE;
+				this.gameModel.resetGame();
 				this.placeStones();
 				this.changeTurnIndicator();
-				this.calculateScore();
-				this.evaluateButtons();
+				this.invalidateScoreLabel();
+				this.invalidateHistoryButtons();
 			}
 			else if (e.label == SINGLE_PLAYER_STRING)
 			{
@@ -744,13 +668,10 @@ package
 			}
 			else if (e.label == NETWORK_PLAY_STRING)
 			{
-				this.networkMode = true;
 				var networkAlert:Alert = new Alert(this.stage, this.ppi);
 				networkAlert.addEventListener(AlertEvent.ALERT_CLICKED, onNetworkPlayCanceled);
 				networkAlert.show("Searching", "Looking for another player on the network.", [CANCEL_STRING]);
-				this.netConnection = new NetConnection();
-				this.netConnection.addEventListener(NetStatusEvent.NET_STATUS, onNetStatus);
-				this.netConnection.connect("rtmfp:");
+				gameModel.startNetworkPlay();
 			}
 		}
 		
@@ -761,77 +682,12 @@ package
 				var alert:Alert = e.target as Alert;
 				alert.removeEventListener(AlertEvent.ALERT_CLICKED, onNetworkPlayCanceled);
 			}
-			if (this.netGroup != null)
-			{
-				this.netGroup.close();
-				this.netGroup = null;
-			}
-			if (this.netConnection != null && this.netConnection.connected)
-			{
-				this.netConnection.close();
-				this.netConnection = null;
-			}
-			this.networkMode = false;
-		}
-		
-		private function onNetStatus(e:NetStatusEvent):void
-		{
-			switch(e.info.code)
-			{
-				case "NetConnection.Connect.Success":
-					this.setUpGroup();
-					break;
-				case "NetGroup.Connect.Success":
-					// NetGroup successfully set up.
-					break;
-				case "NetGroup.Neighbor.Connect":
-					var networkAlert:Alert = this.getCurrentAlert();
-					if (networkAlert != null) networkAlert.close();
-					var newAlert:Alert = new Alert(this.stage, this.ppi);
-					newAlert.addEventListener(AlertEvent.ALERT_CLICKED, onNetworkColorChosen);
-					newAlert.show("Choose a Color",
-						"Choose your color. Remember, " + BLACK_COLOR_NAME + " always goes first.",
-						[WHITE_COLOR_NAME, BLACK_COLOR_NAME, CANCEL_STRING]);
-					break;
-				case "NetGroup.Posting.Notify":
-					var message:Object = e.info.message;
-					if (message.type == "move")
-					{
-						this.makeMove(message.x, message.y);
-					}
-					else if (message.type == "setup")
-					{
-						var alert:Alert = this.getCurrentAlert();
-						if (alert != null) alert.close();
-						this.setupNetworkGame(message.opponentColor);
-					}
-					else if (message.type == "history")
-					{
-						if (message.direction == "back")
-						{
-							this.onBack(null, false);
-						}
-						else if (message.direction == "next")
-						{
-							this.onNext(null, false);
-						}
-					}
-					break;
-			}
-		}
-		
-		// TBD: IP address???
-		// TBD: Alert if peer is lost
-		private function setUpGroup():void
-		{
-			var groupspec:GroupSpecifier = new GroupSpecifier("iReverse");
-			groupspec.postingEnabled = true;
-			groupspec.ipMulticastMemberUpdatesEnabled = true;
-			groupspec.addIPMulticastAddress("225.225.0.1:30000");
-			this.netGroup = new NetGroup(this.netConnection, groupspec.groupspecWithAuthorizations());
-			this.netGroup.addEventListener(NetStatusEvent.NET_STATUS, onNetStatus);
-		}
 
+			gameModel.cancelNetworkPlay();
+		}
+		
+		
+		
 		private function onNetworkColorChosen(e:AlertEvent):void
 		{
 			var alert:Alert = e.target as Alert;
@@ -844,86 +700,52 @@ package
 			var message:Object = new Object();
 			message.type = "setup";
 			message.opponentColor = e.label;
-			message.sender = this.netGroup.convertPeerIDToGroupAddress(this.netConnection.nearID);
-			this.sendNetworkMessage(message);
-			this.setupNetworkGame((e.label == BLACK_COLOR_NAME) ? WHITE_COLOR_NAME : BLACK_COLOR_NAME);
-		}
-		
-		private function sendNetworkMessage(message:Object):void
-		{
-			if (!this.networkMode) return;
-			if (this.netConnection != null && this.netConnection.connected && this.netGroup != null && this.netGroup.neighborCount > 0)
-			{
-				message.time = new Date().time;
-				this.netGroup.post(message);
-			}
-		}
-		
-		private function setupNetworkGame(computerColorString:String):void
-		{
-			this.playerMode = SINGLE_PLAYER_MODE;
-			this.computerColor = (computerColorString == BLACK_COLOR_NAME) ? BLACK : WHITE;
-			this.prepareGame();
+			message.sender = this.gameModel.netGroup.convertPeerIDToGroupAddress(this.gameModel.netConnection.nearID);
+			
+			this.gameModel.sendNetworkMessage(message);
+			this.gameModel.setupNetworkGame((e.label == BLACK_COLOR_NAME) ? WHITE_COLOR_NAME : BLACK_COLOR_NAME);
+			
 			this.placeStones();
 			this.changeTurnIndicator();
-			this.calculateScore();
-			this.evaluateButtons();
+			this.invalidateScoreLabel();
+			this.invalidateHistoryButtons();
 		}
-			
+		
 		private function onComputerColorChosen(e:AlertEvent):void
 		{
 			var alert:Alert = e.target as Alert;
 			alert.removeEventListener(AlertEvent.ALERT_CLICKED, onComputerColorChosen);
 			if (e.label == CANCEL_STRING) return;
-			this.playerMode = SINGLE_PLAYER_MODE;
-			this.computerColor = (e.label == COMPUTER_COLOR_STRING + WHITE_COLOR_NAME) ? WHITE : BLACK;
-			this.prepareGame();
+			this.gameModel.playerMode = ReversiGameModel.SINGLE_PLAYER_MODE;
+			this.gameModel.reversiAI.computerColor = (e.label == COMPUTER_COLOR_STRING + WHITE_COLOR_NAME) ? ReversiGameModel.WHITE : ReversiGameModel.BLACK;
+			this.gameModel.resetGame();
 			this.placeStones();
 			this.changeTurnIndicator();
-			this.calculateScore();
-			this.evaluateButtons();
-			if (this.computerColor == BLACK) this.onStartComputerMove();
+			this.invalidateScoreLabel();
+			this.invalidateHistoryButtons();
+			if (this.gameModel.reversiAI.computerColor == ReversiGameModel.BLACK) gameModel.makeComputerMove();
 		}
 		
-		private function initStones():void
+		
+		private function invalidateHistoryButtons():void
 		{
-			this.stones = new Array(8);
-			for (var i:uint = 0; i < 8; ++i)
+			this.backButton.enabled = (this.gameModel.historyIndex == 0) ? false : true;
+			this.nextButton.enabled = (this.gameModel.history[this.gameModel.historyIndex+1] == null) ? false : true;
+			if (this.backButton2 != null) this.backButton2.enabled = (this.gameModel.historyIndex == 0) ? false : true;
+			if (this.nextButton2 != null) this.nextButton2.enabled = (this.gameModel.history[this.gameModel.historyIndex+1] == null) ? false : true;
+		}
+		
+		private function invalidateScoreLabel():void
+		{
+			//this.gameModel.calculateScore();
+			if (this.whiteScoreLabel!= null && this.blackScoreLabel != null)
 			{
-				this.stones[i] = new Array(8);
+				this.whiteScoreLabel.update(String(this.gameModel.whiteScore));
+				this.blackScoreLabel.update(String(this.gameModel.blackScore));
+				this.alignScores();
 			}
-			this.stones[3][3] = WHITE;
-			this.stones[4][4] = WHITE;
-			this.stones[4][3] = BLACK;
-			this.stones[3][4] = BLACK;
-			this.saveHistory();
-		}
+		}		
 		
-		private function saveHistory():void
-		{
-			++this.historyIndex;
-			var historyEntry:HistoryEntry = new HistoryEntry();
-			historyEntry.board = this.deepCopyStoneArray(this.stones);
-			historyEntry.turn = this.turn;
-			this.history[this.historyIndex] = historyEntry;
-			for (var i:uint = this.historyIndex + 1; i < 64; ++i)
-			{
-				this.history[i] = null;
-			}
-			this.so.data[HISTORY_KEY] = this.history;
-			this.so.data[PLAYER_MODE_KEY] = this.playerMode;
-			this.so.data[COMPUTER_COLOR_KEY] = this.computerColor;
-			this.so.flush();
-		}
-		
-		private function deletePersistentData():void
-		{
-			this.so.data[HISTORY_KEY] = null;
-			this.so.data[PLAYER_MODE_KEY] = null;
-			this.so.data[COMPUTER_COLOR_KEY] = null;
-			this.so.flush();
-		}
-
 		private function placeStones():void
 		{
 			this.pieces = new Vector.<Bitmap>(64);
@@ -934,8 +756,8 @@ package
 			{
 				for (var y:uint = 0; y < 8; ++y)
 				{
-					if (this.stones[x][y] == null) continue;
-					this.placeStone(this.stones[x][y], x, y);
+					if (this.gameModel.stones[x][y] == null) continue;
+					this.placeStone(this.gameModel.stones[x][y], x, y);
 				}
 			}
 			if (this.reticlePosition != null)
@@ -963,7 +785,7 @@ package
 
 		private function placeReticleStone():void
 		{
-			var stone:Bitmap = this.getStone(this.turn, this.reticlePosition.x, this.reticlePosition.y);
+			var stone:Bitmap = this.getStone(this.gameModel.currentTurn, this.reticlePosition.x, this.reticlePosition.y);
 			stone.filters = [this.reticleFilter];
 			this.placeThisStone(stone, this.reticlePosition.x, this.reticlePosition.y);
 		}
@@ -971,7 +793,7 @@ package
 		private function getStone(color:Boolean, x:uint, y:uint):Bitmap
 		{
 			var cellSize:Number = (this.board.width / 8); 
-			var stone:Bitmap = (color == WHITE) ? new Bitmap(this.whiteStoneBitmap.bitmapData) : new Bitmap(this.blackStoneBitmap.bitmapData);
+			var stone:Bitmap = (color == ReversiGameModel.WHITE) ? new Bitmap(this.whiteStoneBitmap.bitmapData) : new Bitmap(this.blackStoneBitmap.bitmapData);
 			stone.x = (x * cellSize) + 2;
 			stone.y = (y * cellSize) + 2;
 			return stone;
@@ -994,131 +816,13 @@ package
 		
 		private function onBoardClicked(e:MouseEvent):void
 		{
-			if (this.playerMode == SINGLE_PLAYER_MODE && this.turn == this.computerColor) return;
+			if (this.gameModel.playerMode == ReversiGameModel.SINGLE_PLAYER_MODE && this.gameModel.currentTurn == this.gameModel.reversiAI.computerColor) return;
 			if (this.stoneEffectTimer.running) return;
 			var scaleFactor:uint = this.board.width / 8;
 			var x:uint = e.localX / scaleFactor;
 			var y:uint = e.localY / scaleFactor;
-			this.makeMove(x, y);
-			if (this.playerMode == SINGLE_PLAYER_MODE && this.turn == this.computerColor && !this.networkMode)
-			{
-				this.onStartComputerMove();
-			}
-		}
-		
-		private function makeMove(x:uint, y:uint):void
-		{
-			if (this.stones[x][y] != null) return;
-			if (this.findCaptures(this.turn, x, y, true) == 0) return;
-			this.placeStone(this.turn, x, y);
-			this.stones[x][y] = this.turn;
-			this.onTurnFinished(true, true);
-			if (this.networkMode)
-			{
-				var message:Object = new Object();
-				message.type = "move";
-				message.x = x;
-				message.y = y;
-				message.sender = this.netGroup.convertPeerIDToGroupAddress(this.netConnection.nearID);
-				this.sendNetworkMessage(message);
-			}
-		}
-		
-		private function deepCopyStoneArray(stoneArray:Array):Array
-		{
-			var newStones:Array = new Array(8);
-			for (var x:uint = 0; x < 8; ++x)
-			{
-				newStones[x] = new Array(8);
-				for (var y:uint = 0; y < 8; ++y)
-				{
-					if (stoneArray[x][y] != null) newStones[x][y] = stoneArray[x][y];
-				}
-			}
-			return newStones;
-		}
-		
-		private function findCaptures(turn:Boolean, x:uint, y:uint, turnStones:Boolean, stones:Array = null):uint
-		{
-			stones = (stones == null) ? this.stones : stones;
-			if (stones[x][y] != null) return 0;
-			var topLeft:uint     = this.walkPath(turn, x, y, -1, -1, turnStones, stones); // top left
-			var top:uint         = this.walkPath(turn, x, y,  0, -1, turnStones, stones); // top
-			var topRight:uint    = this.walkPath(turn, x, y,  1, -1, turnStones, stones); // top right
-			var right:uint       = this.walkPath(turn, x, y,  1,  0, turnStones, stones); // right
-			var bottomRight:uint = this.walkPath(turn, x, y,  1,  1, turnStones, stones); // bottom right
-			var bottom:uint      = this.walkPath(turn, x, y,  0,  1, turnStones, stones); // bottom
-			var bottomLeft:uint  = this.walkPath(turn, x, y, -1, +1, turnStones, stones); // bottom left
-			var left:uint        = this.walkPath(turn, x, y, -1,  0, turnStones, stones); // left
-			return (topLeft + top + topRight + right + bottomRight + bottom + bottomLeft + left);
-		}
-		
-		private function walkPath(turn:Boolean, x:uint, y:uint, xFactor:int, yFactor:int, turnStones:Boolean, stones:Array):uint
-		{
-			// Are we in bounds?
-			if (x + xFactor > 7 || x + xFactor < 0 || y + yFactor > 7 || y + yFactor < 0)
-			{
-				return 0;
-			}
 
-			// Is the next squre empty?
-			if (stones[x + xFactor][y + yFactor] == null)
-			{
-				return 0;
-			}
-			
-			var nextStone:Boolean = stones[x + xFactor][y + yFactor];
-
-			// Is the next stone the wrong color?
-			if (nextStone != !turn)
-			{
-				return 0;
-			}
-			
-			// Find the next piece of the same color
-			var tmpX:int = x, tmpY:int = y;
-			var stoneCount:uint = 0;
-			while (true)
-			{
-				++stoneCount;
-				tmpX = tmpX + xFactor;
-				tmpY = tmpY + yFactor;
-				if (tmpX < 0 || tmpY < 0 || tmpX > 7 || tmpY > 7 || stones[tmpX][tmpY] == null) // Not enclosed
-				{
-					return 0;
-				}
-				nextStone = this.stones[tmpX][tmpY];
-				if (nextStone == turn) // Capture!
-				{
-					if (turnStones) this.turnStones(turn, x, y, tmpX, tmpY, xFactor, yFactor, stones);
-					return stoneCount - 1;
-				}
-			}
-			return 0;
-		}
-		
-		private function turnStones(turn:Boolean, fromX:uint, fromY:uint, toX:uint, toY:uint, xFactor:uint, yFactor:uint, stones:Array):void
-		{
-			var nextX:uint = fromX, nextY:uint = fromY;
-			var stonesToTurn:Array = new Array();
-			while (true)
-			{
-				nextX = nextX + xFactor;
-				nextY = nextY + yFactor;
-				stones[nextX][nextY] = turn;
-				if (stones == this.stones)
-				{
-					if (toX != nextX || toY != nextY)
-					{
-						stonesToTurn.push({turn:turn, x:nextX, y:nextY});
-					}
-				}
-				if (nextX == toX && nextY == toY)
-				{
-					this.playStoneEffects(stonesToTurn);
-					break;
-				}
-			}
+			this.gameModel.makeMove(x, y);
 		}
 		
 		private function playStoneEffects(stonesToTurn:Array):void
@@ -1165,54 +869,68 @@ package
 			this.stoneEffectTimer.start();
 		}
 		
-		private function onTurnFinished(changeTurn:Boolean, saveHistory:Boolean):void
+		private function onTurnFinished( event:ReversiGameModelEvent ):void //changeTurn:Boolean, saveHistory:Boolean):void
 		{
+			var x:uint = event.turnX;
+			var y:uint = event.turnY;
+			
+			var changeTurn:Boolean = true;
+			var saveHistory:Boolean = true;
+			
+			this.placeStone(this.gameModel.currentTurn, x, y);
 			if (changeTurn) this.changeTurn();
-			this.calculateScore();
-			if (this.isNextMovePossible(this.turn))
+			this.invalidateScoreLabel();
+			
+			if (this.gameModel.isNextMovePossible(this.gameModel.currentTurn))
 			{
 				this.finishTurn(saveHistory);
+				
+				if (this.gameModel.playerMode == ReversiGameModel.SINGLE_PLAYER_MODE && this.gameModel.currentTurn == this.gameModel.reversiAI.computerColor && !this.gameModel.networkMode)
+				{
+					gameModel.makeComputerMove();
+				}
+				
 				return;
 			}
 
-			if ((this.blackScore + this.whiteScore) == 64) // All stones played. Game is over.
+			if ((this.gameModel.blackScore + this.gameModel.whiteScore) == 64) // All stones played. Game is over.
 			{
 				var allStonesPlayedAlert:Alert = new Alert(this.stage, this.ppi);
 				allStonesPlayedAlert.addEventListener(AlertEvent.ALERT_CLICKED, genericAlertClicked);
-				if (this.blackScore == this.whiteScore) // Tie game
+				if (this.gameModel.blackScore == this.gameModel.whiteScore) // Tie game
 				{
 					allStonesPlayedAlert.show("Tie Game!", "Good job! You both finished with the exact same number of stones.");
 					this.finishTurn(saveHistory);
 					return;
 				}
-				var winner:String = (this.blackScore > this.whiteScore) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
+				var winner:String = (this.gameModel.blackScore > this.gameModel.whiteScore) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
 				allStonesPlayedAlert.show(winner + " Wins!", "All stones have been played, so the game is over. Well done, " + winner + "!");
 				this.finishTurn(saveHistory);
 				return;
 			}
 						
-			if (this.blackScore == 0 || this.whiteScore == 0) // All stones captured. Game over.
+			if (this.gameModel.blackScore == 0 || this.gameModel.whiteScore == 0) // All stones captured. Game over.
 			{
 				var allStonesCapturedAlert:Alert = new Alert(this.stage, this.ppi);
 				allStonesCapturedAlert.addEventListener(AlertEvent.ALERT_CLICKED, genericAlertClicked);
-				var zeroPlayer:String = (this.blackScore == 0) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
-				var nonZeroPlayer:String = (this.blackScore != 0) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
+				var zeroPlayer:String = (this.gameModel.blackScore == 0) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
+				var nonZeroPlayer:String = (this.gameModel.blackScore != 0) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
 				allStonesCapturedAlert.show(nonZeroPlayer + " Wins!", nonZeroPlayer + " has captured all of " + zeroPlayer + "'s stones. Well done, " + nonZeroPlayer + "!");
 				this.finishTurn(saveHistory);
 				return;
 			}
 			
-			if (!this.isNextMovePossible(!this.turn)) // Neither player can make a move. Unusual, but possible. Game is over.
+			if (!this.gameModel.isNextMovePossible(!this.gameModel.currentTurn)) // Neither player can make a move. Unusual, but possible. Game is over.
 			{
 				var noMoreMovesAlert:Alert = new Alert(this.stage, this.ppi);
 				noMoreMovesAlert.addEventListener(AlertEvent.ALERT_CLICKED, genericAlertClicked);
-				if (this.blackScore == this.whiteScore) // Tie game
+				if (this.gameModel.blackScore == this.gameModel.whiteScore) // Tie game
 				{
 					noMoreMovesAlert.show("Tie Game!", "Neither player can make a move, and you both have the exact same number of stones. Good game!");
 					this.finishTurn(saveHistory);
 					return;
 				}
-				var defaultWinner:String = (this.blackScore > this.whiteScore) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
+				var defaultWinner:String = (this.gameModel.blackScore > this.gameModel.whiteScore) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
 				noMoreMovesAlert.show(defaultWinner + " Wins!", "Neither player can make a move, therefore the game is over and " + defaultWinner + " wins!");
 				this.finishTurn(saveHistory);
 				return;
@@ -1221,8 +939,8 @@ package
 			// Game isn't over, but opponent can't place a stone.
 			if (changeTurn) this.changeTurn();
 			var noNextMoveAlert:Alert = new Alert(this.stage, this.ppi);
-			var side:String = (this.turn == WHITE) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
-			var otherSide:String = (this.turn != WHITE) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
+			var side:String = (this.gameModel.currentTurn == ReversiGameModel.WHITE) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
+			var otherSide:String = (this.gameModel.currentTurn != ReversiGameModel.WHITE) ? BLACK_COLOR_NAME : WHITE_COLOR_NAME;
 			noNextMoveAlert.addEventListener(AlertEvent.ALERT_CLICKED, onNoNextMovePossible);
 			noNextMoveAlert.show("No Move Available", side + " has no possible moves, and therefore must pass. It's still " + otherSide + "'s turn.");
 			this.finishTurn(saveHistory);
@@ -1236,42 +954,29 @@ package
 		
 		private function finishTurn(saveHistory:Boolean):void
 		{
-			if (saveHistory) this.saveHistory();
-			this.evaluateButtons();
+			if (saveHistory) this.gameModel.saveHistory();
+			this.invalidateHistoryButtons();
 		}
 		
 		private function onNoNextMovePossible(e:AlertEvent):void
 		{
 			var alert:Alert = e.target as Alert;
 			alert.removeEventListener(AlertEvent.ALERT_CLICKED, onNoNextMovePossible);
-			if (this.playerMode == SINGLE_PLAYER_MODE && this.turn == computerColor)
+			if (this.gameModel.playerMode == ReversiGameModel.SINGLE_PLAYER_MODE && this.gameModel.currentTurn == this.gameModel.reversiAI.computerColor)
 			{
-				this.onStartComputerMove();
+				gameModel.makeComputerMove();
 			}
-		}
-		
-		private function isNextMovePossible(player:Boolean):Boolean
-		{
-			for (var x:uint = 0; x < 8; ++x)
-			{
-				for (var y:uint = 0; y < 8; ++y)
-				{
-					if (this.stones[x][y] != null) continue;
-					if (this.findCaptures(player, x, y, false) > 0) return true;
-				}
-			}
-			return false;
 		}
 		
 		private function changeTurn():void
 		{
-			this.turn = !this.turn;
+			this.gameModel.currentTurn = !this.gameModel.currentTurn;
 			this.changeTurnIndicator();
 		}
 		
 		private function changeTurnIndicator():void
 		{
-			if (this.turn == WHITE)
+			if (this.gameModel.currentTurn == ReversiGameModel.WHITE)
 			{
 				this.whiteScoreLabel.filters = null;
 				this.blackScoreLabel.filters = [this.turnFilter];
@@ -1281,202 +986,6 @@ package
 				this.blackScoreLabel.filters = null;
 				this.whiteScoreLabel.filters = [this.turnFilter];
 			}
-		}
-		
-		private function evaluateButtons():void
-		{
-			this.backButton.enabled = (this.historyIndex == 0) ? false : true;
-			this.nextButton.enabled = (this.history[this.historyIndex+1] == null) ? false : true;
-			if (this.backButton2 != null) this.backButton2.enabled = (this.historyIndex == 0) ? false : true;
-			if (this.nextButton2 != null) this.nextButton2.enabled = (this.history[this.historyIndex+1] == null) ? false : true;
-		}
-		
-		private function calculateScore():void
-		{
-			var black:uint = 0;
-			var white:uint = 0;
-			for (var x:uint = 0; x < this.stones.length; ++x)
-			{
-				for (var y:uint = 0; y < this.stones[x].length; ++y)
-				{
-					if (this.stones[x][y] == null)
-					{
-						continue;
-					}
-					else if (this.stones[x][y] == WHITE)
-					{
-						++white;
-					}
-					else
-					{
-						++black;
-					}
-				}
-			}
-			this.blackScore = black;
-			this.whiteScore = white;
-			if (this.whiteScoreLabel!= null && this.blackScoreLabel != null)
-			{
-				this.whiteScoreLabel.update(String(this.whiteScore));
-				this.blackScoreLabel.update(String(this.blackScore));
-				this.alignScores();
-			}
-		}
-
-		private function onStartComputerMove():void
-		{
-			var computerGo:Function = function():void
-			{
-				if (!stoneEffectTimer.running)
-				{
-					computerWaitTimer.stop();
-					computerWaitTimer.removeEventListener(TimerEvent.TIMER, computerGo);
-					calculateMove();
-				}
-			};
-			this.computerWaitTimer.addEventListener(TimerEvent.TIMER, computerGo);
-			this.computerWaitTimer.start();
-		}
-		
-		////  Simple triage-based AI. Opt for the best moves first, and the worst moves last. ////
-		
-		private const TOP_LEFT_CORNER:Array     = [0,0];
-		private const TOP_RIGHT_CORNER:Array    = [7,0];
-		private const BOTTOM_RIGHT_CORNER:Array = [7,7];
-		private const BOTTOM_LEFT_CORNER:Array  = [0,7];
-		
-		private const TOP_LEFT_X:Array     = [1,1];
-		private const TOP_RIGHT_X:Array    = [6,1];
-		private const BOTTOM_RIGHT_X:Array = [6,6];
-		private const BOTTOM_LEFT_X:Array  = [1,6];
-
-		private const TOP_TOP_LEFT:Array        = [1,0];
-		private const TOP_BOTTOM_LEFT:Array     = [0,1];
-		private const TOP_TOP_RIGHT:Array       = [6,0];
-		private const TOP_BOTTOM_RIGHT:Array    = [7,1];
-		private const BOTTOM_TOP_RIGHT:Array    = [7,6];
-		private const BOTTOM_BOTTOM_RIGHT:Array = [6,7];
-		private const BOTTOM_TOP_LEFT:Array     = [0,6];
-		private const BOTTOM_BOTTOM_LEFT:Array  = [1,7];
-
-		private function calculateMove():void
-		{
-			// Try to capture a corner...
-			if (this.findCaptures(this.computerColor, TOP_LEFT_CORNER[0],     TOP_LEFT_CORNER[1],     false) > 0) {this.onFinishComputerMove(TOP_LEFT_CORNER[0],     TOP_LEFT_CORNER[1]);     return;}
-			if (this.findCaptures(this.computerColor, TOP_RIGHT_CORNER[0],    TOP_RIGHT_CORNER[1],    false) > 0) {this.onFinishComputerMove(TOP_RIGHT_CORNER[0],    TOP_RIGHT_CORNER[1]);    return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_RIGHT_CORNER[0], BOTTOM_RIGHT_CORNER[1], false) > 0) {this.onFinishComputerMove(BOTTOM_RIGHT_CORNER[0], BOTTOM_RIGHT_CORNER[1]); return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_LEFT_CORNER[0],  BOTTOM_LEFT_CORNER[1],  false) > 0) {this.onFinishComputerMove(BOTTOM_LEFT_CORNER[0],  BOTTOM_LEFT_CORNER[1]);  return;}
-
-			// If you already own a corner, try to build off it...
-			if (this.stones[TOP_LEFT_CORNER[0]][TOP_LEFT_CORNER[1]] == this.computerColor)
-			{
-				if (this.findAdjacentMove(TOP_LEFT_CORNER[0], TOP_LEFT_CORNER[1], 1, 0, 6)) return;
-				if (this.findAdjacentMove(TOP_LEFT_CORNER[0], TOP_LEFT_CORNER[1], 0, 1, 6)) return;
-			}
-			if (this.stones[TOP_RIGHT_CORNER[0]][TOP_RIGHT_CORNER[1]] == this.computerColor)
-			{
-				if (this.findAdjacentMove(TOP_RIGHT_CORNER[0], TOP_RIGHT_CORNER[1], -1, 0, 6)) return;
-				if (this.findAdjacentMove(TOP_RIGHT_CORNER[0], TOP_RIGHT_CORNER[1], 0, 1, 6)) return;
-			}
-			if (this.stones[BOTTOM_RIGHT_CORNER[0]][BOTTOM_RIGHT_CORNER[1]] == this.computerColor)
-			{
-				if (this.findAdjacentMove(BOTTOM_RIGHT_CORNER[0], BOTTOM_RIGHT_CORNER[1], -1, 0, 6)) return;
-				if (this.findAdjacentMove(BOTTOM_RIGHT_CORNER[0], BOTTOM_RIGHT_CORNER[1], 0, -1, 6)) return;
-			}
-			if (this.stones[BOTTOM_LEFT_CORNER[0]][BOTTOM_LEFT_CORNER[1]] == this.computerColor)
-			{
-				if (this.findAdjacentMove(BOTTOM_LEFT_CORNER[0], BOTTOM_LEFT_CORNER[1], 1, 0, 6)) return;
-				if (this.findAdjacentMove(BOTTOM_LEFT_CORNER[0], BOTTOM_LEFT_CORNER[1], 0, -1, 6)) return;
-			}
-			
-			// Try to capture a side piece, but nothing adjacent to a corner
-			if (this.findAdjacentMove(TOP_TOP_LEFT[0],        TOP_TOP_LEFT[1],         1,  0, 4)) return;
-			if (this.findAdjacentMove(TOP_BOTTOM_RIGHT[0],    TOP_BOTTOM_RIGHT[1],     0,  1, 4)) return;
-			if (this.findAdjacentMove(BOTTOM_BOTTOM_RIGHT[0], BOTTOM_BOTTOM_RIGHT[1], -1,  0, 4)) return;
-			if (this.findAdjacentMove(BOTTOM_TOP_LEFT[0],     BOTTOM_TOP_LEFT[1],      0, -1, 4)) return;
-
-			// Find the move that captures the most stones (excluding X-squares and squares close to corners)...
-			var captureCounts:Array = new Array();
-			for (var x:uint = 0; x < 7; ++x)
-			{
-				for (var y:uint = 0; y < 7; ++y)
-				{
-					if (this.stones[x][y] != null) continue;
-					if ((x == TOP_LEFT_X[0]          && y == TOP_LEFT_X[1]) ||
-						(x == TOP_RIGHT_X[0]         && y == TOP_RIGHT_X[1]) ||
-						(x == BOTTOM_LEFT_X[0]       && y == BOTTOM_LEFT_X[1]) ||
-						(x == BOTTOM_RIGHT_X[0]      && y == BOTTOM_RIGHT_X[1]) ||
-						(x == TOP_TOP_LEFT[0]        && y == TOP_TOP_LEFT[1]) ||
-						(x == TOP_BOTTOM_LEFT[0]     && y == TOP_BOTTOM_LEFT[1]) ||
-						(x == TOP_TOP_RIGHT[0]       && y == TOP_TOP_RIGHT[1]) ||
-						(x == TOP_BOTTOM_RIGHT[0]    && y == TOP_BOTTOM_RIGHT[1]) ||
-						(x == BOTTOM_TOP_RIGHT[0]    && y == BOTTOM_TOP_RIGHT[1]) ||
-						(x == BOTTOM_BOTTOM_RIGHT[0] && y == BOTTOM_BOTTOM_RIGHT[1]) ||
-						(x == BOTTOM_TOP_LEFT[0]     && y == BOTTOM_TOP_LEFT[1]) ||
-						(x == BOTTOM_BOTTOM_LEFT[0]  && y == BOTTOM_BOTTOM_LEFT[1]))
-					{
-						continue;
-					}
-					var captureCount:uint = this.findCaptures(this.computerColor, x, y, false);
-					if (captureCount == 0) continue;
-					var captureData:Object = new Object();
-					captureData.stones = captureCount;
-					captureData.x = x;
-					captureData.y = y;
-					captureCounts.push(captureData);
-				}
-			}
-
-			if (captureCounts.length > 0)
-			{
-				captureCounts.sortOn("stones", Array.NUMERIC, Array.DESCENDING);
-				var bestMove:Object = captureCounts.pop();
-				if (bestMove.stones > 0)
-				{
-					this.onFinishComputerMove(bestMove.x, bestMove.y);
-					return;
-				}
-			}
-
-			// No choice but to move adjacent to a corner.
-			if (this.findCaptures(this.computerColor, TOP_TOP_LEFT[0],        TOP_TOP_LEFT[1],        false)) {this.onFinishComputerMove(TOP_TOP_LEFT[0],        TOP_TOP_LEFT[1]); return;}
-			if (this.findCaptures(this.computerColor, TOP_BOTTOM_LEFT[0],     TOP_BOTTOM_LEFT[1],     false)) {this.onFinishComputerMove(TOP_BOTTOM_LEFT[0],     TOP_BOTTOM_LEFT[1]); return;}
-			if (this.findCaptures(this.computerColor, TOP_TOP_RIGHT[0],       TOP_TOP_RIGHT[1],       false)) {this.onFinishComputerMove(TOP_TOP_RIGHT[0],       TOP_TOP_RIGHT[1]); return;}
-			if (this.findCaptures(this.computerColor, TOP_BOTTOM_RIGHT[0],    TOP_BOTTOM_RIGHT[1],    false)) {this.onFinishComputerMove(TOP_BOTTOM_RIGHT[0],    TOP_BOTTOM_RIGHT[1]); return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_TOP_RIGHT[0],    BOTTOM_TOP_RIGHT[1],    false)) {this.onFinishComputerMove(BOTTOM_TOP_RIGHT[0],    BOTTOM_TOP_RIGHT[1]); return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_BOTTOM_RIGHT[0], BOTTOM_BOTTOM_RIGHT[1], false)) {this.onFinishComputerMove(BOTTOM_BOTTOM_RIGHT[0], BOTTOM_BOTTOM_RIGHT[1]); return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_TOP_LEFT[0],     BOTTOM_TOP_LEFT[1],     false)) {this.onFinishComputerMove(BOTTOM_TOP_LEFT[0],     BOTTOM_TOP_LEFT[1]); return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_BOTTOM_LEFT[0],  BOTTOM_BOTTOM_LEFT[1],  false)) {this.onFinishComputerMove(BOTTOM_BOTTOM_LEFT[0],  BOTTOM_BOTTOM_LEFT[1]); return;}
-			
-			// No choice but to move in one of the x-squares. Worst possible move.
-			if (this.findCaptures(this.computerColor, TOP_LEFT_X[0],     TOP_LEFT_X[1],     false)) {this.onFinishComputerMove(TOP_LEFT_X[0],     TOP_LEFT_X[1]); return;}
-			if (this.findCaptures(this.computerColor, TOP_RIGHT_X[0],    TOP_RIGHT_X[1],    false)) {this.onFinishComputerMove(TOP_RIGHT_X[0],    TOP_RIGHT_X[1]); return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_LEFT_X[0],  BOTTOM_LEFT_X[1],  false)) {this.onFinishComputerMove(BOTTOM_LEFT_X[0],  BOTTOM_LEFT_X[1]); return;}
-			if (this.findCaptures(this.computerColor, BOTTOM_RIGHT_X[0], BOTTOM_RIGHT_X[1], false)) {this.onFinishComputerMove(BOTTOM_RIGHT_X[0], BOTTOM_RIGHT_X[1]); return;}
-		}
-		
-		private function findAdjacentMove(x:uint, y:uint, xFactor:int, yFactor:int, depth:uint):Boolean
-		{
-			var testX:uint = x, testY:uint = y;
-			for (var i:uint = 0; i < depth; ++i)
-			{
-				testX += xFactor;
-				testY += yFactor;
-				if (this.stones[testX][testY] == null)
-				{
-					if (this.findCaptures(this.computerColor, testX, testY, false) > 0)
-					{
-						this.onFinishComputerMove(testX, testY);
-						return true;
-					}
-				}
-			}
-			return false;
-		}
-		
-		private function onFinishComputerMove(x:uint, y:uint):void
-		{
-			this.makeMove(x, y);
 		}
 	}
 }
